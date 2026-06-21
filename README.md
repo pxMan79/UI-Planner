@@ -49,7 +49,8 @@ npm run server
   - `SERVER_KEY`
 - 服务器目录约定为 `/opt/projects/ui-planner`，首次部署会自动 clone，之后每次都会 `git fetch --all && git reset --hard origin/main`。
 - 容器默认把宿主机 `3217` 端口映射到应用 `3000` 端口，项目数据持久化在仓库下的 `data/` 目录。
-- 如果前面挂了 Nginx Proxy Manager，只需要把域名反代到 `127.0.0.1:3217`。
+- 容器会额外接入服务器既有的 `nginx-proxy-manager_npm-net` 外部网络。
+- 如果前面挂了 Nginx Proxy Manager，优先直接反代到容器名 `ui-planner:3000`；保底也可以反代到宿主机 `127.0.0.1:3217`。
 
 ## 功能
 

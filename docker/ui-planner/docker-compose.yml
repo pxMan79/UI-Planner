@@ -12,3 +12,11 @@ services:
       - "3217:3000"
     volumes:
       - ../../data:/app/data
+    networks:
+      - default
+      - npm-net
+
+networks:
+  npm-net:
+    external: true
+    name: nginx-proxy-manager_npm-net
