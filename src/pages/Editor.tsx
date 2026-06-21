@@ -3,15 +3,13 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CanvasBoard } from "@/components/editor/CanvasBoard";
-import { CanvasDuplicateAction } from "@/components/editor/CanvasDuplicateAction";
-import { CanvasHistoryActions } from "@/components/editor/CanvasHistoryActions";
-import { CanvasRotateAction } from "@/components/editor/CanvasRotateAction";
-import { CanvasToolbarActions } from "@/components/editor/CanvasToolbarActions";
+import { CanvasFloatingActions } from "@/components/editor/CanvasFloatingActions";
 import { InspectorPanel } from "@/components/editor/InspectorPanel";
 import { LayersPanel } from "@/components/editor/LayersPanel";
 import { PreviewPanel } from "@/components/editor/PreviewPanel";
 import { ProjectSwitcher } from "@/components/editor/ProjectSwitcher";
 import { TopToolbar } from "@/components/editor/TopToolbar";
+import { safeFileName } from "@/lib/utils";
 import { usePlannerStore } from "@/store/usePlannerStore";
 import { ModuleDraft } from "@/types/planner";
 import { buildExportPayload } from "@/utils/htmlExport";
@@ -37,6 +35,18 @@ const COMPACT_LAYOUT_BREAKPOINT = 1280;
 
 const clampSidebarWidth = (value: number) =>
   Math.min(Math.max(value, MIN_SIDEBAR_WIDTH), MAX_SIDEBAR_WIDTH);
+
+// 云端操作统一的错误兜底：失败弹一句友好提示（带后端文案或网络兜底语），
+// 而不是每个 handler 各写一遍同样的 try/catch。
+const runCloudAction = async (action: () => Promise<void>, label: string) => {
+  try {
+    await action();
+  } catch (error) {
+    window.alert(
+      `${label}：${error instanceof Error ? error.message : "无法连接到存储服务"}`,
+    );
+  }
+};
 
 export function Editor() {
   const [viewportWidth, setViewportWidth] = useState(() =>
@@ -131,7 +141,7 @@ export function Editor() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${project.name.replace(/\s+/g, "-") || "ui-template"}.html`;
+    anchor.download = `${safeFileName(project.name, "ui-template")}.html`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
@@ -147,7 +157,7 @@ export function Editor() {
     const url = stage.toDataURL({ pixelRatio: 2 });
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${project.name.replace(/\s+/g, "-") || "ui-template"}.png`;
+    anchor.download = `${safeFileName(project.name, "ui-template")}.png`;
     anchor.click();
   };
 
@@ -173,7 +183,7 @@ export function Editor() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${project.name.replace(/\s+/g, "-") || "ui-planner"}.json`;
+    anchor.download = `${safeFileName(project.name, "ui-planner")}.json`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
@@ -196,56 +206,54 @@ export function Editor() {
 
   // 保存到云端：已绑定后端 id 则覆盖写，否则新建并把返回的 id 绑定到当前工程。
   // 新建后才有 remoteProjectId，之后的「保存」就都走覆盖、不再产生重复项目。
-  const handleSaveToCloud = async (forceNew = false) => {
-    setSaving(true);
-    try {
-      const api = await import("@/utils/projectApi");
-      if (!forceNew && remoteProjectId) {
-        await api.saveProject(remoteProjectId, project);
-      } else {
-        const created = await api.createProject(project);
-        setRemoteProjectId(created.id);
+  // newName 仅「另存为」传入：先把工程改成新名字再新建，保证另存出来的是独立命名的副本
+  //（重名/空名的拦截在 ProjectSwitcher 里完成，这里只负责落库）。
+  const handleSaveToCloud = (forceNew = false, newName?: string) =>
+    runCloudAction(async () => {
+      setSaving(true);
+      try {
+        const api = await import("@/utils/projectApi");
+        if (!forceNew && remoteProjectId) {
+          await api.saveProject(remoteProjectId, project);
+        } else {
+          const named =
+            newName && newName !== project.name
+              ? { ...project, name: newName }
+              : project;
+          const created = await api.createProject(named);
+          // 另存为成功后，当前画布即切换为这份新副本（绑定其 id、更新名字）。
+          if (newName && newName !== project.name) {
+            setProjectMeta({ name: newName });
+          }
+          setRemoteProjectId(created.id);
+        }
+        setProjectListVersion((value) => value + 1);
+      } finally {
+        setSaving(false);
       }
-      setProjectListVersion((value) => value + 1);
-    } catch (error) {
-      window.alert(
-        `保存失败：${error instanceof Error ? error.message : "无法连接到存储服务"}`,
-      );
-    } finally {
-      setSaving(false);
-    }
-  };
+    }, "保存失败");
 
   // 加载云端项目：拉回完整工程并连同后端 id 一起替换当前画布。
-  const handleLoadProject = async (id: string) => {
-    try {
+  const handleLoadProject = (id: string) =>
+    runCloudAction(async () => {
       const api = await import("@/utils/projectApi");
       const loaded = await api.fetchProject(id);
       loadRemoteProject(id, loaded);
-    } catch (error) {
-      window.alert(
-        `加载失败：${error instanceof Error ? error.message : "无法连接到存储服务"}`,
-      );
-    }
-  };
+    }, "加载失败");
 
   // 删除云端项目：删的若是当前正在编辑的项目，解除本地的 id 绑定（工程内容保留为草稿）。
-  const handleDeleteProject = async (id: string) => {
+  const handleDeleteProject = (id: string) => {
     if (!window.confirm("确定删除这个云端项目？此操作无法撤销。")) {
       return;
     }
-    try {
+    return runCloudAction(async () => {
       const api = await import("@/utils/projectApi");
       await api.deleteProject(id);
       if (id === remoteProjectId) {
         setRemoteProjectId(null);
       }
       setProjectListVersion((value) => value + 1);
-    } catch (error) {
-      window.alert(
-        `删除失败：${error instanceof Error ? error.message : "无法连接到存储服务"}`,
-      );
-    }
+    }, "删除失败");
   };
 
   const resetLayout = () => {
@@ -426,6 +434,74 @@ export function Editor() {
       window.addEventListener("pointerup", handlePointerUp);
     };
 
+  // 画布、图层栏、属性+预览这三块在紧凑/桌面两种布局里完全一致，只是外层容器不同。
+  // 抽成共享变量后两个分支直接引用，避免整段 JSX 逐字复制（改一处不会漏掉另一处）。
+  const canvasProps = {
+    width: project.width,
+    height: project.height,
+    backgroundImage: project.backgroundImage,
+    modules: project.modules,
+    selectedModuleId,
+    onSelect: selectModule,
+    onAddModule: addModule,
+    onUpdateModule: updateModule,
+    onDropModule: dropModule,
+    leftCollapsed,
+    rightCollapsed,
+    onQuickAddModule: handleAddModule,
+    onToggleLeft: () => setLeftCollapsed((current) => !current),
+    onToggleRight: () => setRightCollapsed((current) => !current),
+    onResetLayout: resetLayout,
+    snapEnabled,
+    onToggleSnap: toggleSnap,
+    toolbarSlot: (
+      <CanvasFloatingActions
+        canUndo={past.length > 0}
+        canRedo={future.length > 0}
+        onUndo={undo}
+        onRedo={redo}
+        hasSelection={!!selectedModuleId}
+        onRotate={() => selectedModuleId && rotateModule(selectedModuleId)}
+        onDuplicate={() =>
+          selectedModuleId && duplicateModule(selectedModuleId)
+        }
+        onReset={handleResetProject}
+        onImportConfig={handleImportConfig}
+      />
+    ),
+  };
+
+  const layersPanel = (
+    <LayersPanel
+      nodes={layeredNodes}
+      totalCount={project.modules.length}
+      selectedModuleId={selectedModuleId}
+      onSelect={selectModule}
+      onToggleVisible={(module) =>
+        updateModule(module.id, { visible: !module.visible })
+      }
+      onToggleLocked={(module) =>
+        updateModule(module.id, { locked: !module.locked })
+      }
+      onToggleCollapsed={toggleCollapsed}
+      onDuplicate={duplicateModule}
+      onDelete={deleteModule}
+      onReorder={reorderModule}
+    />
+  );
+
+  const inspectorAndPreview = (
+    <>
+      <InspectorPanel
+        project={project}
+        selectedModule={selectedModule}
+        onProjectMetaChange={setProjectMeta}
+        onModuleChange={updateModule}
+      />
+      <PreviewPanel project={project} payload={exportPayload} />
+    </>
+  );
+
   return (
     <main className="relative flex h-screen flex-col overflow-hidden bg-[radial-gradient(circle_at_top,#0b1024_0%,#05060f_60%)] text-white">
       {/* 极光帷幕：固定铺满视口的流动光带，位于所有面板之下（见 index.css）。 */}
@@ -460,7 +536,8 @@ export function Editor() {
             saving={saving}
             refreshSignal={projectListVersion}
             onSave={() => void handleSaveToCloud()}
-            onSaveAsNew={() => void handleSaveToCloud(true)}
+            onSaveAsNew={(newName) => void handleSaveToCloud(true, newName)}
+            currentName={project.name}
             onLoad={(id) => void handleLoadProject(id)}
             onDelete={(id) => void handleDeleteProject(id)}
           />
@@ -470,88 +547,25 @@ export function Editor() {
       {isCompactLayout ? (
         <div className="relative min-h-0 flex-1 p-5">
           <CanvasBoard
-            width={project.width}
-            height={project.height}
-            backgroundImage={project.backgroundImage}
-            modules={project.modules}
-            selectedModuleId={selectedModuleId}
-            onSelect={selectModule}
-            onAddModule={addModule}
-            onUpdateModule={updateModule}
-            onDropModule={dropModule}
+            {...canvasProps}
             onStageReady={(stage) => {
               stageRef.current = stage;
             }}
             stageLabel="沉浸画布模式"
             stageHint="通过浮动工具条展开图层栏或属性栏"
             immersive
-            leftCollapsed={leftCollapsed}
-            rightCollapsed={rightCollapsed}
-            onQuickAddModule={handleAddModule}
-            onToggleLeft={() => setLeftCollapsed((current) => !current)}
-            onToggleRight={() => setRightCollapsed((current) => !current)}
-            onResetLayout={resetLayout}
-            snapEnabled={snapEnabled}
-            onToggleSnap={toggleSnap}
-            toolbarSlot={
-              <>
-                <CanvasHistoryActions
-                  canUndo={past.length > 0}
-                  canRedo={future.length > 0}
-                  onUndo={undo}
-                  onRedo={redo}
-                />
-                <CanvasRotateAction
-                  disabled={!selectedModuleId}
-                  onRotate={() =>
-                    selectedModuleId && rotateModule(selectedModuleId)
-                  }
-                />
-                <CanvasDuplicateAction
-                  disabled={!selectedModuleId}
-                  onDuplicate={() =>
-                    selectedModuleId && duplicateModule(selectedModuleId)
-                  }
-                />
-                <CanvasToolbarActions
-                  onReset={handleResetProject}
-                  onImportConfig={handleImportConfig}
-                />
-              </>
-            }
           />
 
           {!leftCollapsed ? (
             <aside className="absolute inset-y-5 left-5 z-30 w-[min(340px,calc(100vw-40px))] overflow-hidden rounded-[28px] shadow-[0_30px_80px_rgba(0,0,0,0.45)]">
-              <LayersPanel
-                nodes={layeredNodes}
-                totalCount={project.modules.length}
-                selectedModuleId={selectedModuleId}
-                onSelect={selectModule}
-                onToggleVisible={(module) =>
-                  updateModule(module.id, { visible: !module.visible })
-                }
-                onToggleLocked={(module) =>
-                  updateModule(module.id, { locked: !module.locked })
-                }
-                onToggleCollapsed={toggleCollapsed}
-                onDuplicate={duplicateModule}
-                onDelete={deleteModule}
-                onReorder={reorderModule}
-              />
+              {layersPanel}
             </aside>
           ) : null}
 
           {!rightCollapsed ? (
             <aside className="absolute inset-y-5 right-5 z-30 w-[min(380px,calc(100vw-40px))] overflow-hidden rounded-[28px] shadow-[0_30px_80px_rgba(0,0,0,0.45)]">
               <div className="grid h-full min-h-0 gap-5 bg-night-950/80 backdrop-blur-xl xl:grid-rows-[auto_minmax(0,1fr)]">
-                <InspectorPanel
-                  project={project}
-                  selectedModule={selectedModule}
-                  onProjectMetaChange={setProjectMeta}
-                  onModuleChange={updateModule}
-                />
-                <PreviewPanel project={project} payload={exportPayload} />
+                {inspectorAndPreview}
               </div>
             </aside>
           ) : null}
@@ -569,22 +583,7 @@ export function Editor() {
             className="min-w-0 overflow-hidden pr-5"
             style={{ display: leftCollapsed ? "none" : "block" }}
           >
-            <LayersPanel
-              nodes={layeredNodes}
-              totalCount={project.modules.length}
-              selectedModuleId={selectedModuleId}
-              onSelect={selectModule}
-              onToggleVisible={(module) =>
-                updateModule(module.id, { visible: !module.visible })
-              }
-              onToggleLocked={(module) =>
-                updateModule(module.id, { locked: !module.locked })
-              }
-              onToggleCollapsed={toggleCollapsed}
-              onDuplicate={duplicateModule}
-              onDelete={deleteModule}
-              onReorder={reorderModule}
-            />
+            {layersPanel}
           </div>
 
           <SidebarHandle
@@ -595,50 +594,8 @@ export function Editor() {
 
           <div className="min-w-0 px-0 xl:px-0">
             <CanvasBoard
-              width={project.width}
-              height={project.height}
-              backgroundImage={project.backgroundImage}
-              modules={project.modules}
-              selectedModuleId={selectedModuleId}
-              onSelect={selectModule}
-              onAddModule={addModule}
-              onUpdateModule={updateModule}
-              onDropModule={dropModule}
-              leftCollapsed={leftCollapsed}
-              rightCollapsed={rightCollapsed}
-              onQuickAddModule={handleAddModule}
-              onToggleLeft={() => setLeftCollapsed((current) => !current)}
-              onToggleRight={() => setRightCollapsed((current) => !current)}
-              onResetLayout={resetLayout}
-              snapEnabled={snapEnabled}
-              onToggleSnap={toggleSnap}
+              {...canvasProps}
               onStageReady={(stage) => (stageRef.current = stage)}
-              toolbarSlot={
-                <>
-                  <CanvasHistoryActions
-                    canUndo={past.length > 0}
-                    canRedo={future.length > 0}
-                    onUndo={undo}
-                    onRedo={redo}
-                  />
-                  <CanvasRotateAction
-                    disabled={!selectedModuleId}
-                    onRotate={() =>
-                      selectedModuleId && rotateModule(selectedModuleId)
-                    }
-                  />
-                  <CanvasDuplicateAction
-                    disabled={!selectedModuleId}
-                    onDuplicate={() =>
-                      selectedModuleId && duplicateModule(selectedModuleId)
-                    }
-                  />
-                  <CanvasToolbarActions
-                    onReset={handleResetProject}
-                    onImportConfig={handleImportConfig}
-                  />
-                </>
-              }
             />
           </div>
 
@@ -653,13 +610,7 @@ export function Editor() {
             style={{ display: rightCollapsed ? "none" : "block" }}
           >
             <div className="grid h-full min-h-0 gap-5 xl:grid-rows-[auto_minmax(0,1fr)]">
-              <InspectorPanel
-                project={project}
-                selectedModule={selectedModule}
-                onProjectMetaChange={setProjectMeta}
-                onModuleChange={updateModule}
-              />
-              <PreviewPanel project={project} payload={exportPayload} />
+              {inspectorAndPreview}
             </div>
           </div>
         </div>

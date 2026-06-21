@@ -19,6 +19,7 @@ import {
   Transformer,
 } from "react-konva";
 
+import { ToolbarButton } from "@/components/editor/ToolbarButton";
 import { useElementSize } from "@/hooks/useElementSize";
 import { ModuleDraft, UIModule } from "@/types/planner";
 import {
@@ -198,6 +199,18 @@ export function CanvasBoard({
   // 会被压成 4~5 屏幕像素，太窄而难以命中——尤其是画布边界这种「孤零零一条线」。
   // 换算成 屏幕像素 / 缩放比，贴合手感就不随缩放变化（边界与模块间都更容易吸住）。
   const snapThreshold = SNAP_THRESHOLD / stageScale;
+
+  // 模块内文字的「反向缩放」系数：画布常被缩小渲染（stageScale<1），若用固定字号，
+  // 14px 字会被一并压成屏幕上的 7px 左右，难以辨认。把字号/内边距乘 1/stageScale，
+  // 文字在屏幕上就保持恒定可读大小，不随画布缩放变化——也不影响导出（导出走另一套 CSS）。
+  // 上限封顶，避免画布极小、缩放比很低时字大到撑爆小模块。
+  const labelScale = Math.min(1 / stageScale, 2.2);
+  const nameFontSize = 14 * labelScale;
+  const descFontSize = 12 * labelScale;
+  const padX = 14 * labelScale;
+  const padTop = 12 * labelScale;
+  // 说明文字从名称下方一行起排：名称基线 + 一点行距。
+  const descTop = padTop + nameFontSize + 6 * labelScale;
 
   const getPointerPosition = () => {
     const stage = stageRef.current;
@@ -462,11 +475,11 @@ export function CanvasBoard({
                       shadowColor={module.accent}
                     />
                     <Text
-                      x={14}
-                      y={12}
-                      width={Math.max(module.width - 28, 8)}
+                      x={padX}
+                      y={padTop}
+                      width={Math.max(module.width - padX * 2, 8)}
                       text={module.name}
-                      fontSize={14}
+                      fontSize={nameFontSize}
                       fontStyle="bold"
                       fill="#f8fbff"
                       ellipsis
@@ -474,12 +487,12 @@ export function CanvasBoard({
                     />
                     {module.description.trim() ? (
                       <Text
-                        x={14}
-                        y={36}
-                        width={Math.max(module.width - 28, 8)}
-                        height={Math.max(module.height - 48, 0)}
+                        x={padX}
+                        y={descTop}
+                        width={Math.max(module.width - padX * 2, 8)}
+                        height={Math.max(module.height - descTop - padTop, 0)}
                         text={module.description}
-                        fontSize={12}
+                        fontSize={descFontSize}
                         lineHeight={1.45}
                         fill="rgba(226,232,240,0.88)"
                         wrap="word"
@@ -505,22 +518,37 @@ export function CanvasBoard({
 
                 {/* 吸附参考线：极光绿细线，仅在拖动/缩放命中对齐时短暂出现。
                     listening=false 不拦截指针，strokeScaleEnabled=false 让线宽
-                    不随 stageScale 变粗（保持 1px 观感）。 */}
-                {guides.map((guide, index) => (
-                  <Line
-                    key={`guide-${guide.axis}-${index}`}
-                    points={
-                      guide.axis === "x"
-                        ? [guide.position, guide.start, guide.position, guide.end]
-                        : [guide.start, guide.position, guide.end, guide.position]
-                    }
-                    stroke="#34f0a8"
-                    strokeWidth={1}
-                    dash={[6, 4]}
-                    strokeScaleEnabled={false}
-                    listening={false}
-                  />
-                ))}
+                    不随 stageScale 变粗（保持恒定屏幕观感）。
+                    贴画布四边的参考线（position=0 或 画布宽/高）正好落在 stage 最外圈，
+                    而画布外层那层 1px CSS 边框（border-white/10）盖在最外圈像素上，会把
+                    贴边的细线整条挡住、看起来「没有线」。故把贴边的 position 向画布内侧
+                    夹 2 个屏幕像素（换算成画布坐标 = 2 / stageScale）躲开边框，整条线
+                    就能完整显示。线加粗到 1.5、并描一层深色细边，在网格上更醒目。 */}
+                {guides.map((guide, index) => {
+                  const inset = 2 / stageScale;
+                  const max = guide.axis === "x" ? width : height;
+                  const pos = Math.min(
+                    Math.max(guide.position, inset),
+                    max - inset,
+                  );
+                  return (
+                    <Line
+                      key={`guide-${guide.axis}-${index}`}
+                      points={
+                        guide.axis === "x"
+                          ? [pos, guide.start, pos, guide.end]
+                          : [guide.start, pos, guide.end, pos]
+                      }
+                      stroke="#34f0a8"
+                      strokeWidth={1.5}
+                      dash={[6, 4]}
+                      shadowColor="rgba(0,0,0,0.6)"
+                      shadowBlur={2}
+                      strokeScaleEnabled={false}
+                      listening={false}
+                    />
+                  );
+                })}
 
                 <Transformer
                   ref={transformerRef}
@@ -662,14 +690,15 @@ export function CanvasBoard({
         <div className="pointer-events-none absolute inset-x-0 bottom-6 z-20 flex justify-center px-5">
           <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-white/10 bg-slate-950/80 px-3 py-2 shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl">
             {/* 吸附开关放最左：开启时高亮极光绿，与右端缩放指示形成对称收尾。 */}
-            <QuickAction
+            <ToolbarButton
               onClick={onToggleSnap}
               label={snapEnabled ? "吸附中" : "自由"}
               icon={<Magnet className="h-4 w-4" />}
               active={snapEnabled}
+              ariaPressed={snapEnabled}
               title="切换吸附定位 / 自由模式（快捷键 S）"
             />
-            <QuickAction
+            <ToolbarButton
               onClick={onQuickAddModule}
               label="新增模块"
               icon={<Plus className="h-4 w-4" />}
@@ -677,19 +706,19 @@ export function CanvasBoard({
             />
             {immersive ? (
               <>
-                <QuickAction
+                <ToolbarButton
                   onClick={onToggleLeft}
                   label={leftCollapsed ? "展开图层" : "收起图层"}
                   icon={<PanelLeft className="h-4 w-4" />}
                 />
-                <QuickAction
+                <ToolbarButton
                   onClick={onToggleRight}
                   label={rightCollapsed ? "展开属性" : "收起属性"}
                   icon={<PanelRight className="h-4 w-4" />}
                 />
               </>
             ) : null}
-            <QuickAction
+            <ToolbarButton
               onClick={onResetLayout}
               label="重置视图"
               icon={<ScanSearch className="h-4 w-4" />}
@@ -704,33 +733,5 @@ export function CanvasBoard({
         </div>
       </div>
     </section>
-  );
-}
-
-type QuickActionProps = {
-  label: string;
-  icon: ReactNode;
-  onClick?: () => void;
-  // active=高亮态（如吸附开启），用于开关型按钮的视觉反馈。
-  active?: boolean;
-  title?: string;
-};
-
-function QuickAction({ label, icon, onClick, active, title }: QuickActionProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-pressed={active}
-      className={
-        active
-          ? "inline-flex items-center gap-2 rounded-full border border-aurora-green/50 bg-aurora-green/15 px-3 py-2 text-xs font-medium text-aurora-green transition"
-          : "inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-100 transition hover:border-aurora-green/40 hover:bg-aurora-green/10"
-      }
-    >
-      {icon}
-      {label}
-    </button>
   );
 }

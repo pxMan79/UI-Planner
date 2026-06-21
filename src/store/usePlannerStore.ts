@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 
 import { createDefaultProject } from "@/utils/defaultProject";
 import { CanvasProject, ModuleDraft, UIModule } from "@/types/planner";
+import { lightenHex, randomAccent } from "@/utils/color";
 import {
   collectDescendantIds,
   resolveDropParent,
@@ -37,10 +38,6 @@ type PlannerStore = {
   updateModule: (moduleId: string, patch: Partial<UIModule>) => void;
   deleteModule: (moduleId: string) => void;
   duplicateModule: (moduleId: string) => void;
-  bringToFront: (moduleId: string) => void;
-  sendToBack: (moduleId: string) => void;
-  // 分组嵌套：把模块挂到某父模块下（parentId=null 解除嵌套，回到顶层）。
-  setModuleParent: (moduleId: string, parentId: string | null) => void;
   // 图层栏拖拽重排：把 draggedId 放到 targetId 的「之前/之后/内部」。
   // before/after=同层重排（继承 target 的父），inside=嵌套成 target 的子模块。
   // 一次性完成「改父 + 改同层顺序(zIndex)」，与画布拖拽合并互补。
@@ -78,36 +75,6 @@ const withHistory = (
   project: nextProject,
   ...extra,
 });
-
-// 把目标模块移到最前或最后，并将所有模块的 zIndex 重排为连续的 1..n。
-// 返回的数组保持原始顺序（仅 zIndex 被改写），方便上层继续按 id 引用。
-const reorderZIndex = (
-  modules: UIModule[],
-  moduleId: string,
-  direction: "front" | "back",
-): UIModule[] => {
-  const ordered = [...modules].sort((a, b) => a.zIndex - b.zIndex);
-  const targetIndex = ordered.findIndex((module) => module.id === moduleId);
-  if (targetIndex === -1) {
-    return modules;
-  }
-
-  const [target] = ordered.splice(targetIndex, 1);
-  if (direction === "front") {
-    ordered.push(target);
-  } else {
-    ordered.unshift(target);
-  }
-
-  const zIndexById = new Map(
-    ordered.map((module, index) => [module.id, index + 1]),
-  );
-
-  return modules.map((module) => ({
-    ...module,
-    zIndex: zIndexById.get(module.id) ?? module.zIndex,
-  }));
-};
 
 const maxZIndex = (modules: UIModule[]) =>
   modules.reduce((max, item) => Math.max(max, item.zIndex), 0);
@@ -223,9 +190,18 @@ export const usePlannerStore = create<PlannerStore>()(
       addModule: (draft) =>
         set((state) => {
           const moduleId = createModuleId();
+          // accent 取色优先级：① draft 显式指定 → 用它；② 当前有选中模块 →
+          // 以它的颜色为基底淡化一档（同色系层次，区分父子/相邻关系）；
+          // ③ 都没有 → 从预设调色板随机取一个（连续新增颜色各异，比清一色绿好认）。
+          const selected = state.project.modules.find(
+            (module) => module.id === state.selectedModuleId,
+          );
+          const accent =
+            draft.accent ??
+            (selected ? lightenHex(selected.accent, 0.32) : randomAccent());
           const nextModule: UIModule = {
             id: moduleId,
-            accent: draft.accent ?? "#34f0a8",
+            accent,
             description: draft.description,
             height: draft.height,
             locked: false,
@@ -312,45 +288,6 @@ export const usePlannerStore = create<PlannerStore>()(
               modules: [...state.project.modules, duplicate],
             }),
             { selectedModuleId: duplicateId },
-          );
-        }),
-      // 把目标移到最前/最后后，重新把所有 zIndex 归一化为 1..n 的连续整数。
-      // 旧实现是「比当前最小值再 -1」，反复点击会让 zIndex 无限向负漂移，
-      // 既不直观，也让导出的层级数字越来越难读。归一化后层级永远干净。
-      bringToFront: (moduleId) =>
-        set((state) =>
-          withHistory(
-            state,
-            stampProject({
-              ...state.project,
-              modules: reorderZIndex(state.project.modules, moduleId, "front"),
-            }),
-          ),
-        ),
-      sendToBack: (moduleId) =>
-        set((state) =>
-          withHistory(
-            state,
-            stampProject({
-              ...state.project,
-              modules: reorderZIndex(state.project.modules, moduleId, "back"),
-            }),
-          ),
-        ),
-      setModuleParent: (moduleId, parentId) =>
-        set((state) => {
-          // 防环：不能把模块挂到它自己或它的子孙下，否则树会断裂/死循环。
-          if (wouldCreateCycle(state.project.modules, moduleId, parentId)) {
-            return state;
-          }
-          return withHistory(
-            state,
-            stampProject({
-              ...state.project,
-              modules: state.project.modules.map((module) =>
-                module.id === moduleId ? { ...module, parentId } : module,
-              ),
-            }),
           );
         }),
       reorderModule: (draggedId, targetId, position) =>

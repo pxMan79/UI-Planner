@@ -62,7 +62,7 @@ export function InspectorPanel({
                   description: event.target.value,
                 })
               }
-              className="panel-textarea !min-h-[84px] !leading-6"
+              className="panel-textarea thin-scrollbar !min-h-[84px] !leading-6"
               placeholder="描述这个区域的功能与布局建议"
             />
           </Field>

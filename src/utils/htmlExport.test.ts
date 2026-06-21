@@ -34,13 +34,15 @@ const makeProject = (modules: UIModule[]): CanvasProject => ({
 
 describe("htmlExport", () => {
   it("生成包含画布尺寸的完整 HTML 文档", () => {
-    const payload = buildExportPayload(createDefaultProject());
+    const project = createDefaultProject();
+    const payload = buildExportPayload(project);
 
     expect(payload.document).toContain("<!doctype html>");
     // 画布尺寸作为「参考」写进 max-width / aspect-ratio，而非死钉的固定宽高。
     expect(payload.css).toContain("max-width: 1440px;");
     expect(payload.css).toContain("aspect-ratio: 1440 / 960;");
-    expect(payload.document).toContain("增长页规划草案 - UI 布局规格稿");
+    // 标题用示例的实际项目名，避免改示例文案就得改测试。
+    expect(payload.document).toContain(`${project.name} - UI 布局规格稿`);
   });
 
   it("文档顶部输出 DESIGN BRIEF，便于 AI 先建立整体布局认知", () => {

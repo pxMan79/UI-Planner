@@ -6,6 +6,7 @@ import {
   RefreshCw,
   Save,
   Trash2,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -22,8 +23,11 @@ type ProjectSwitcherProps = {
   onSave: () => void;
   // 加载某个后端项目到画布。
   onLoad: (id: string) => void;
-  // 另存为新项目（强制走新建，断开当前 id 绑定）。
-  onSaveAsNew: () => void;
+  // 另存为新项目（强制走新建，断开当前 id 绑定）。必须传入一个新名字——
+  // 「另存为」要求改名，不允许同名另存，避免云端出现一堆同名副本难以区分。
+  onSaveAsNew: (name: string) => void;
+  // 当前工程名：另存为时作为改名输入的初始值，并用于判定「是否真的改了名」。
+  currentName: string;
   // 删除某个后端项目。
   onDelete: (id: string) => void;
 };
@@ -35,12 +39,16 @@ export function ProjectSwitcher({
   onSave,
   onLoad,
   onSaveAsNew,
+  currentName,
   onDelete,
 }: ProjectSwitcherProps) {
   const [open, setOpen] = useState(false);
   const [list, setList] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 「另存为」改名态：null=未在另存为；字符串=正在输入新名字。
+  // 进入该态会把保存/另存为两按钮替换成「名字输入 + 确认/取消」。
+  const [saveAsName, setSaveAsName] = useState<string | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
@@ -93,36 +101,49 @@ export function ProjectSwitcher({
 
       {open ? (
         <div className="absolute right-0 top-[calc(100%+8px)] z-40 w-80 rounded-2xl border border-white/10 bg-slate-950/95 p-3 shadow-[0_24px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl">
-          {/* 保存 / 另存为：一行两按钮。保存=覆盖当前同名工程（有 id 才可用），
-              另存为=始终新建一份。把云端保存收进项目下拉，不再占用导航栏。 */}
-          <div className="flex items-center gap-2 pb-3">
-            <button
-              type="button"
-              onClick={() => {
-                onSave();
+          {/* 保存 / 另存为：默认两按钮。保存=覆盖当前同名工程（有 id 才可用）。
+              另存为=必须改名后新建：点击进入「改名输入」态，校验新名字非空、
+              与当前名不同、且不与已有云端项目重名，才允许确认——杜绝同名副本。 */}
+          {saveAsName === null ? (
+            <div className="flex items-center gap-2 pb-3">
+              <button
+                type="button"
+                onClick={() => {
+                  onSave();
+                }}
+                disabled={saving}
+                className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-emerald-300/30 bg-emerald-300/10 text-sm text-emerald-100 transition hover:border-emerald-300/50 hover:bg-emerald-300/15 disabled:opacity-60"
+              >
+                {saving ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                保存
+              </button>
+              <button
+                type="button"
+                onClick={() => setSaveAsName(currentName)}
+                disabled={saving}
+                className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-aurora-green/30 bg-aurora-green/10 text-sm text-aurora-green transition hover:border-aurora-green/50 hover:bg-aurora-green/15 disabled:opacity-60"
+              >
+                <FilePlus2 className="h-4 w-4" />
+                另存为
+              </button>
+            </div>
+          ) : (
+            <SaveAsForm
+              initialName={saveAsName}
+              currentName={currentName}
+              existingNames={list.map((item) => item.name)}
+              saving={saving}
+              onCancel={() => setSaveAsName(null)}
+              onConfirm={(name) => {
+                onSaveAsNew(name);
+                setSaveAsName(null);
               }}
-              disabled={saving}
-              className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-emerald-300/30 bg-emerald-300/10 text-sm text-emerald-100 transition hover:border-emerald-300/50 hover:bg-emerald-300/15 disabled:opacity-60"
-            >
-              {saving ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="h-4 w-4" />
-              )}
-              保存
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                onSaveAsNew();
-              }}
-              disabled={saving}
-              className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-aurora-green/30 bg-aurora-green/10 text-sm text-aurora-green transition hover:border-aurora-green/50 hover:bg-aurora-green/15 disabled:opacity-60"
-            >
-              <FilePlus2 className="h-4 w-4" />
-              另存为
-            </button>
-          </div>
+            />
+          )}
 
           <div className="flex items-center justify-between px-1 pb-2">
             <span className="text-[11px] uppercase tracking-[0.24em] text-slate-500">
@@ -152,7 +173,7 @@ export function ProjectSwitcher({
             </div>
           ) : null}
 
-          <ul className="max-h-72 space-y-1 overflow-auto">
+          <ul className="thin-scrollbar max-h-72 space-y-1 overflow-auto">
             {list.map((item) => {
               const active = item.id === remoteProjectId;
               return (
@@ -198,6 +219,103 @@ export function ProjectSwitcher({
             })}
           </ul>
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+// 「另存为」改名表单：输入新名字并实时校验，只有合法（非空、与当前名不同、
+// 不与已有云端项目重名）时确认按钮才可用，从源头杜绝同名另存。
+type SaveAsFormProps = {
+  initialName: string;
+  currentName: string;
+  existingNames: string[];
+  saving: boolean;
+  onCancel: () => void;
+  onConfirm: (name: string) => void;
+};
+
+function SaveAsForm({
+  initialName,
+  currentName,
+  existingNames,
+  saving,
+  onCancel,
+  onConfirm,
+}: SaveAsFormProps) {
+  const [name, setName] = useState(initialName);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // 打开即聚焦并选中，方便直接改名。
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  const trimmed = name.trim();
+  // 重名判定忽略大小写与首尾空白，与后端「按名区分」的直觉一致。
+  const isDuplicate = existingNames.some(
+    (existing) => existing.trim().toLowerCase() === trimmed.toLowerCase(),
+  );
+  const isSameAsCurrent = trimmed === currentName.trim();
+  const error = !trimmed
+    ? "请输入项目名"
+    : isSameAsCurrent
+      ? "另存为需要一个不同的名字"
+      : isDuplicate
+        ? "已有同名云端项目，请换个名字"
+        : null;
+  const canConfirm = !error && !saving;
+
+  const submit = () => {
+    if (canConfirm) {
+      onConfirm(trimmed);
+    }
+  };
+
+  return (
+    <div className="pb-3">
+      <div className="flex items-center gap-2">
+        <input
+          ref={inputRef}
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              submit();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              onCancel();
+            }
+          }}
+          placeholder="另存为新名字"
+          className="h-10 min-w-0 flex-1 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white outline-none transition focus:border-aurora-green/55 focus:ring-2 focus:ring-aurora-green/20"
+        />
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!canConfirm}
+          aria-label="确认另存为"
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-aurora-green/30 bg-aurora-green/10 text-aurora-green transition hover:border-aurora-green/50 hover:bg-aurora-green/15 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {saving ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Check className="h-4 w-4" />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          aria-label="取消另存为"
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-400 transition hover:bg-white/10 hover:text-white"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      {error ? (
+        <p className="mt-1.5 px-1 text-[11px] text-amber-300/90">{error}</p>
       ) : null}
     </div>
   );

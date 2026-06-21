@@ -153,7 +153,7 @@ export function TopToolbar({
             </button>
           </div>
           {briefOpen ? (
-            <div className="absolute left-1/2 top-[calc(100%+8px)] z-30 w-80 -translate-x-1/2 rounded-2xl border border-white/10 bg-slate-950/95 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+            <div className="pointer-events-auto absolute left-1/2 top-[calc(100%+8px)] z-30 w-80 -translate-x-1/2 rounded-2xl border border-white/10 bg-slate-950/95 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl">
               <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">
                 整体说明（写给 AI）
               </div>
