@@ -6,12 +6,12 @@ import {
   FileJson,
   Image as ImageIcon,
   ImagePlus,
-  LayoutTemplate,
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 
+import { BrandLogo } from "@/components/BrandLogo";
 import { CanvasSizeSelect } from "@/components/editor/CanvasSizeSelect";
 
 type TopToolbarProps = {
@@ -107,7 +107,7 @@ export function TopToolbar({
             画布尺寸是工程级设置，从画布底部工具栏挪来此处常驻；背景图挪到标题右侧。 */}
         <div className="flex shrink-0 items-center gap-3">
           <div className="flex h-11 items-center gap-3 rounded-2xl border border-aurora-green/25 bg-gradient-to-r from-aurora-green/15 to-aurora-cyan/10 px-4 text-aurora-green">
-            <LayoutTemplate className="h-4 w-4" />
+            <BrandLogo className="h-6 w-6 shrink-0" />
             <div>
               <div className="text-[11px] uppercase tracking-[0.28em] text-aurora-green/70">
                 UI Planner
