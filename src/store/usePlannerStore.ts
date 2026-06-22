@@ -85,7 +85,9 @@ export const usePlannerStore = create<PlannerStore>()(
   persist(
     (set) => ({
       project: initialProject,
-      selectedModuleId: initialProject.modules[0]?.id ?? null,
+      // 初次打开默认不选中任何模块：让右侧落到「项目属性 + 快捷键」空态，
+      // 而不是一上来就选中示例里的 intro-banner（用户要求）。
+      selectedModuleId: null,
       past: [],
       future: [],
       remoteProjectId: null,
@@ -170,7 +172,8 @@ export const usePlannerStore = create<PlannerStore>()(
         const fresh = createDefaultProject();
         set({
           project: fresh,
-          selectedModuleId: fresh.modules[0]?.id ?? null,
+          // 与初次打开保持一致：默认不选中，落到项目属性空态。
+          selectedModuleId: null,
           // 重置回到全新本地草稿，与任何后端项目脱钩，历史也一并清空。
           past: [],
           future: [],
